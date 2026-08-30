@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EzConv v.1.0.0</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <!-- Frameless Window Title Bar Controls -->
+    <div class="window-titlebar" id="windowTitlebar">
+        <div class="window-drag-region"></div>
+        <div class="window-controls">
+            <button class="win-btn" id="btnWinMinimize" title="最小化">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                    <line x1="5" y1="12" x2="19" y2="12"></line>
+                </svg>
+            </button>
+            <button class="win-btn" id="btnWinMaximize" title="放大">
+                <svg id="iconMax" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="5" y="5" width="14" height="14" rx="1.5"></rect>
+                </svg>
+                <svg id="iconRestore" style="display: none;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M8 5h11v11"></path>
+                    <rect x="5" y="8" width="11" height="11" rx="1.5"></rect>
+                </svg>
+            </button>
+            <button class="win-btn win-close" id="btnWinClose" title="关闭">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                    <line x1="6" y1="18" x2="18" y2="6"></line>
+                </svg>
+            </button>
+        </div>
+    </div>
+
+    <!-- Top Languages Bar -->
+    <nav class="lang-bar">
+        <a class="lang-item" data-lang="en">English</a>
+        <a class="lang-item active" data-lang="zh">简体中文</a>
+    </nav>
+
+    <!-- Global Header (EzConv Title & Subtitle) -->
+    <header class="header-section">
+        <h1 class="main-title" id="txtTitle">EzConv v.1.0.0</h1>
+        <div class="subtitle" id="txtSubtitle">(基于 OpenJPEG 官方解码内核)</div>
+    </header>
+
+    <!-- View 1: Main Home View (Book / File Selection) -->
+    <div id="homeView" style="width: 100%; display: flex; flex-direction: column; align-items: center;">
+        <!-- Sub Links -->
+        <div class="header-links">
+            <a class="header-link-item" id="linkViewOptions">
+                <svg class="header-link-icon" viewBox="0 0 24 24">
+                    <path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/>
+                </svg>
+                <span id="txtLinkOptions">- 查看所有选项</span>
+            </a>
+            <a class="header-link-item" id="linkAbout">
+                <svg class="header-link-icon" viewBox="0 0 24 24">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-4h2v2h-2zm1.07-7.75l-.9.92C11.45 9.9 11 10.5 11 12h2v-.5c0-.55.22-1.05.59-1.41l1.24-1.26c.37-.36.59-.86.59-1.41 0-1.1-.9-2-2-2s-2 .9-2 2H9c0-1.66 1.34-3 3-3s3 1.34 3 3c0 .88-.36 1.68-.93 2.25z"/>
+                </svg>
+                <span id="txtLinkAbout">- 了解更多</span>
+            </a>
+        </div>
+
+        <!-- Path Input Address Bar -->
+        <div class="path-bar-container">
+            <input type="text" id="pathInput" class="path-input" placeholder="在此处粘贴或输入 jp2 文件的地址" spellcheck="false">
+            <button class="path-btn" id="openPathBtn">打开地址</button>
+        </div>
+
+        <!-- Center Dropzone (DjVu.js Box Style) -->
+        <div class="dropzone-box" id="dropzone">
+            <input type="file" id="fileInput" multiple accept=".jp2,.j2k,.jpf,.jpc" style="display: none;">
+            <input type="file" id="folderInput" webkitdirectory directory multiple style="display: none;">
+            
+            <!-- Upload Icon (Tray with Up Arrow - DjVu.js exact icon) -->
+            <svg class="dropzone-icon" viewBox="0 0 24 24">
+                <path d="M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h14v2H5v-2z"/>
+            </svg>
+            <div class="dropzone-text" id="txtDropzone">将文件拖拽至此处或者单击手动选择</div>
+            <div class="dropzone-subtext" id="txtDropzoneSub" style="display: none;">支持单个/多个 .jp2 文件或整本扫描书籍文件夹</div>
+        </div>
+    </div>
+
+    <!-- View 2: Dedicated Book Conversion View -->
+    <div id="bookConvertView" class="book-convert-container" style="display: none;">
+        <div class="book-card">
+            <div class="book-header">
+                <div class="book-info">
+                    <h2 class="book-title" id="bookTitleText">文件名称</h2>
+                    <div class="book-meta" id="bookMetaText">共 0 页 · 目标格式: JPG · 并发线程: 4</div>
+                </div>
+            </div>
+
+            <!-- Progress Section (Clean, no background border box) -->
+            <div class="book-progress-section">
+                <div class="progress-info-row">
+                    <span class="progress-status-label" id="bookProgressStatus">准备转换</span>
+                    <span class="progress-percent-label" id="bookProgressPercent">0% (0/0)</span>
+                </div>
+                <div class="progress-wrap">
+                    <div class="progress-bar-fill" id="bookProgressBarFill"></div>
+                </div>
+            </div>
+
+            <!-- Action Buttons -->
+            <div class="book-actions-container">
+                <button class="btn-large btn-secondary" id="btnCancelConvert">取消</button>
+                <button class="btn-large btn-secondary" id="btnStartBookConvert">开始转换</button>
+                <button class="btn-large btn-secondary" id="btnDownloadBookResult" style="display: none;">保存</button>
+                <button class="btn-large btn-secondary" id="btnConvertAnotherBook" style="display: none;">继续转换</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Modal (DjVu.js Style 选项) -->
+    <div class="modal-mask" id="settingsModal">
+        <div class="modal-content">
+            <button class="modal-close-btn" id="closeSettingsModal" title="关闭">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+            </button>
+            <h2 class="modal-title-center" id="txtModalOptionsTitle">选项</h2>
+
+            <div class="setting-row">
+                <label id="lblLang">语言:</label>
+                <select id="modalLangSelect" class="setting-ctrl">
+                    <option value="zh" selected>简体中文</option>
+                    <option value="en">English</option>
+                </select>
+            </div>
+
+            <div class="setting-row">
+                <label id="lblFormat">目标格式:</label>
+                <select id="settingFormat" class="setting-ctrl">
+                    <option value="jpg" selected>JPG / JPEG</option>
+                    <option value="png">PNG</option>
+                </select>
+            </div>
+
+            <div class="setting-row" id="qualityRow">
+                <label id="lblQuality">JPEG 压缩质量:</label>
+                <input type="number" id="settingQuality" class="setting-ctrl" min="1" max="100" value="90">
+            </div>
+
+            <div class="setting-row">
+                <label id="lblThreads">并发线程数:</label>
+                <input type="number" id="settingThreads" class="setting-ctrl" min="1" max="64" value="4">
+            </div>
+
+            <div class="modal-footer">
+                <button class="btn-modal-save" id="saveSettingsBtn">保存并关闭</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- About Modal (了解更多) -->
+    <div class="modal-mask" id="aboutModal">
+        <div class="modal-content">
+            <button class="modal-close-btn" id="closeAboutModal" title="关闭">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+            </button>
+            <h2 class="modal-title-center" id="txtAboutTitle">关于 EzConv</h2>
+            <p style="font-size: 14px; margin-bottom: 12px;">
+                本工具用于将 JPEG 2000 (<code>.jp2</code>, <code>.j2k</code>) 高清古籍/扫描图批量转换为通用的 JPG 或 PNG 格式。
+            </p>
+            <ul style="font-size: 13.5px; color: var(--subtext-color); padding-left: 20px; line-height: 1.8; margin-bottom: 18px;">
+                <li>纯本地 C++17 离线解码，零网络上传。</li>
+                <li>基于 OpenJPEG 官方解码内核，支持 16-bit 自动下采样。</li>
+                <li>支持多核 CPU 并发多线程加速。</li>
+            </ul>
+            <div class="modal-footer">
+                <button class="btn-modal-save" id="closeAboutBtn">知道了</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast -->
+    <div class="toast-box" id="toastBox"></div>
+
+    <script src="js/app.js"></script>
+</body>
+</html>

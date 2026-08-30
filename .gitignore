@@ -1,0 +1,66 @@
+# Prerequisites
+*.d
+
+# Compiled Object files, libraries, and executables
+*.obj
+*.lib
+!third_party/**/*.lib
+*.a
+*.la
+*.lo
+*.dll
+*.so
+*.so.*
+*.dylib
+*.exe
+*.out
+*.app
+*.i*86
+*.x86_64
+*.hex
+*.exp
+*.pdb
+*.ilk
+*.idb
+
+# CMake Build Directory and generated files (Root level only)
+/build/
+/bin/
+/out/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+*.dir/
+
+# Microsoft Visual Studio / VS Code
+.vs/
+.vscode/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# WebView2 Runtime Cache Folders
+*.WebView2/
+EBWebView/
+
+# Release distributions and test outputs
+dist/
+test_output/
+scratch/
+converted_images/
+*.zip
+*.7z
+*.tar.gz
+*.rar
+
+# Temporary and Log files
+*.log
+*.tmp
+*.temp
+
+# OS generated files
+Thumbs.db
+Desktop.ini
+.DS_Store
