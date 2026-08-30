@@ -22,8 +22,7 @@
 ├── src/                    # C++ 源码实现 (GUI, CLI, 解码引擎, 线程池)
 ├── third_party/            # 第三方依赖 (OpenJPEG 由 CMake 自动拉取, WebView2 SDK 等)
 ├── CMakeLists.txt          # CMake 构建配置
-├── README.md               # 项目说明文档
-└── REQUIREMENTS.md         # 详细技术设计规范与需求文档
+└── README.md               # 项目说明文档
 ```
 
 ---
