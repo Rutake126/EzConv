@@ -54,12 +54,26 @@ set(SOURCES
 add_executable(jp2convert src/main.cpp ${SOURCES})
 target_link_libraries(jp2convert PRIVATE openjp2)
 
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_FOUND)
+    add_custom_command(
+        OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/src/embedded_html.hpp
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/bundle_assets.py
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/app/index.html 
+                ${CMAKE_CURRENT_SOURCE_DIR}/app/css/style.css 
+                ${CMAKE_CURRENT_SOURCE_DIR}/app/js/app.js 
+                ${CMAKE_CURRENT_SOURCE_DIR}/bundle_assets.py
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Bundling UI assets into embedded_html.hpp"
+    )
+endif()
+
 if(WIN32)
     # Link Windows standard libraries
     target_link_libraries(jp2convert PRIVATE ws2_32)
 
     # Windows Native GUI Target Executable (EzConv)
-    add_executable(EzConv WIN32 src/gui_main.cpp ${SOURCES})
+    add_executable(EzConv WIN32 src/gui_main.cpp src/embedded_html.hpp ${SOURCES})
     target_include_directories(EzConv PRIVATE 
         ${CMAKE_CURRENT_SOURCE_DIR}/third_party/webview2/build/native/include
     )

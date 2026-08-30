@@ -20,6 +20,7 @@
 
 #include "WebView2.h"
 #include "converter_engine.hpp"
+#include "embedded_html.hpp"
 
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "ole32.lib")
@@ -718,6 +719,40 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         return 0;
     }
 
+    case WM_NCCALCSIZE: {
+        if (wParam == TRUE) {
+            if (IsZoomed(hWnd)) {
+                NCCALCSIZE_PARAMS* params = reinterpret_cast<NCCALCSIZE_PARAMS*>(lParam);
+                HMONITOR hMon = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
+                if (hMon) {
+                    MONITORINFO mi = { sizeof(MONITORINFO) };
+                    if (GetMonitorInfoW(hMon, &mi)) {
+                        params->rgrc[0] = mi.rcWork;
+                    }
+                }
+            }
+            return 0;
+        }
+        return 0;
+    }
+
+    case WM_GETMINMAXINFO: {
+        MINMAXINFO* mmi = reinterpret_cast<MINMAXINFO*>(lParam);
+        HMONITOR hMonitor = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
+        if (hMonitor) {
+            MONITORINFO mi = { sizeof(MONITORINFO) };
+            if (GetMonitorInfoW(hMonitor, &mi)) {
+                mmi->ptMaxPosition.x = mi.rcWork.left - mi.rcMonitor.left;
+                mmi->ptMaxPosition.y = mi.rcWork.top - mi.rcMonitor.top;
+                mmi->ptMaxSize.x = mi.rcWork.right - mi.rcWork.left;
+                mmi->ptMaxSize.y = mi.rcWork.bottom - mi.rcWork.top;
+                mmi->ptMinTrackSize.x = 480;
+                mmi->ptMinTrackSize.y = 380;
+            }
+        }
+        return 0;
+    }
+
     case WM_SIZE:
         if (g_controller) {
             RECT bounds;
@@ -782,7 +817,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
         WS_EX_ACCEPTFILES, // Enable native Win32 Drag & Drop
         CLASS_NAME,
         L"EzConv v.1.0.0",
-        WS_POPUP | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_VISIBLE,
+        WS_POPUP | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_VISIBLE,
         x, y, width, height,
         NULL, NULL, hInstance, NULL
     );
@@ -798,19 +833,6 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     ShowWindow(hWnd, nCmdShow);
     UpdateWindow(hWnd);
 
-    // Locate app/index.html
-    wchar_t exePath[MAX_PATH * 2] = {0};
-    GetModuleFileNameW(NULL, exePath, MAX_PATH * 2);
-    fs::path current_dir = fs::path(exePath).parent_path();
-    fs::path html_path = current_dir / "app" / "index.html";
-
-    if (!fs::exists(html_path)) {
-        html_path = current_dir / ".." / ".." / "app" / "index.html";
-    }
-    if (!fs::exists(html_path)) {
-        html_path = current_dir / ".." / "app" / "index.html";
-    }
-
     // Compute user data folder in %LOCALAPPDATA% to prevent polluting application directory
     wchar_t localAppData[MAX_PATH] = {0};
     fs::path user_data_path;
@@ -822,60 +844,66 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
         user_data_path = fs::path(tempPath) / L"EzConv_WebView2";
     }
 
+    std::error_code ec;
+    fs::create_directories(user_data_path, ec);
+
     // Initialize WebView2
     CreateCoreWebView2EnvironmentWithOptions(
         nullptr, user_data_path.c_str(), nullptr,
         Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
-            [hWnd, html_path](HRESULT hr, ICoreWebView2Environment* env) -> HRESULT {
-                if (FAILED(hr) || !env) {
-                    MessageBoxW(hWnd, L"未检测到 WebView2 运行时。请确保 Windows 10/11 已启用 Edge WebView2。", L"启动错误", MB_ICONERROR);
-                    return S_OK;
-                }
+            [hWnd](HRESULT hr, ICoreWebView2Environment* env) -> HRESULT {
+                try {
+                    if (FAILED(hr) || !env) {
+                        MessageBoxW(hWnd, L"未检测到 Microsoft Edge WebView2 运行时。\n请访问微软官网下载安装 WebView2 Runtime（Windows 10/11 通常已内置）。", L"EzConv - 启动提示", MB_ICONWARNING | MB_OK);
+                        return S_OK;
+                    }
 
-                env->CreateCoreWebView2Controller(hWnd,
-                    Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
-                        [hWnd, html_path](HRESULT hr, ICoreWebView2Controller* controller) -> HRESULT {
-                            if (FAILED(hr) || !controller) return S_OK;
+                    env->CreateCoreWebView2Controller(hWnd,
+                        Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
+                            [hWnd](HRESULT hr, ICoreWebView2Controller* controller) -> HRESULT {
+                                try {
+                                    if (FAILED(hr) || !controller) return S_OK;
 
-                            g_controller = controller;
-                            g_controller->get_CoreWebView2(&g_webview);
+                                    g_controller = controller;
+                                    g_controller->get_CoreWebView2(&g_webview);
 
-                            RECT bounds;
-                            GetClientRect(hWnd, &bounds);
-                            g_controller->put_Bounds(bounds);
+                                    RECT bounds;
+                                    GetClientRect(hWnd, &bounds);
+                                    g_controller->put_Bounds(bounds);
 
-                            ComPtr<ICoreWebView2Settings> settings;
-                            g_webview->get_Settings(&settings);
-                            if (settings) {
-                                settings->put_IsScriptEnabled(TRUE);
-                                settings->put_AreDefaultScriptDialogsEnabled(TRUE);
-                                settings->put_IsWebMessageEnabled(TRUE);
-                                settings->put_AreDevToolsEnabled(FALSE);
-                                settings->put_IsStatusBarEnabled(FALSE);
-                            }
+                                    ComPtr<ICoreWebView2Settings> settings;
+                                    g_webview->get_Settings(&settings);
+                                    if (settings) {
+                                        settings->put_IsScriptEnabled(TRUE);
+                                        settings->put_AreDefaultScriptDialogsEnabled(TRUE);
+                                        settings->put_IsWebMessageEnabled(TRUE);
+                                        settings->put_AreDevToolsEnabled(FALSE);
+                                        settings->put_IsStatusBarEnabled(FALSE);
+                                    }
 
-                            // Register Message Handler from JavaScript
-                            EventRegistrationToken token;
-                            g_webview->add_WebMessageReceived(
-                                Callback<ICoreWebView2WebMessageReceivedEventHandler>(
-                                    [](ICoreWebView2* sender, ICoreWebView2WebMessageReceivedEventArgs* args) -> HRESULT {
-                                        (void)sender;
-                                        PWSTR message = nullptr;
-                                        if (SUCCEEDED(args->TryGetWebMessageAsString(&message)) && message) {
-                                            handle_web_message(message);
-                                            CoTaskMemFree(message);
-                                        }
-                                        return S_OK;
-                                    }).Get(), &token);
+                                    // Register Message Handler from JavaScript
+                                    EventRegistrationToken token;
+                                    g_webview->add_WebMessageReceived(
+                                        Callback<ICoreWebView2WebMessageReceivedEventHandler>(
+                                            [](ICoreWebView2* sender, ICoreWebView2WebMessageReceivedEventArgs* args) -> HRESULT {
+                                                try {
+                                                    (void)sender;
+                                                    PWSTR message = nullptr;
+                                                    if (SUCCEEDED(args->TryGetWebMessageAsString(&message)) && message) {
+                                                        handle_web_message(message);
+                                                        CoTaskMemFree(message);
+                                                    }
+                                                } catch (...) {}
+                                                return S_OK;
+                                            }).Get(), &token);
 
-                            std::wstring url = L"file:///" + fs::canonical(html_path).wstring();
-                            for (auto& ch : url) {
-                                if (ch == L'\\') ch = L'/';
-                            }
-                            g_webview->Navigate(url.c_str());
-
-                            return S_OK;
-                        }).Get());
+                                    // Load embedded self-contained HTML directly into WebView2 memory
+                                    std::wstring embedded_html_w = s2ws(get_embedded_html());
+                                    g_webview->NavigateToString(embedded_html_w.c_str());
+                                } catch (...) {}
+                                return S_OK;
+                            }).Get());
+                } catch (...) {}
                 return S_OK;
             }).Get());
 
