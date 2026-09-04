@@ -48,11 +48,18 @@ set(SOURCES
     src/image_encoder.cpp
     src/jp2_decoder.cpp
     src/converter_engine.cpp
+    src/djvu_pdf_engine.cpp
 )
 
 # CLI Target Executable
 add_executable(jp2convert src/main.cpp ${SOURCES})
 target_link_libraries(jp2convert PRIVATE openjp2)
+
+add_custom_command(TARGET jp2convert POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/djvulibre/bin
+        $<TARGET_FILE_DIR:jp2convert>/djvulibre/bin
+)
 
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_FOUND)
@@ -82,6 +89,13 @@ if(WIN32)
         ${CMAKE_CURRENT_SOURCE_DIR}/third_party/webview2/build/native/x64/WebView2LoaderStatic.lib
         shlwapi ole32 shell32 user32 gdi32 advapi32 version dwmapi
     )
+
+    add_custom_command(TARGET EzConv POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${CMAKE_CURRENT_SOURCE_DIR}/third_party/djvulibre/bin
+            $<TARGET_FILE_DIR:EzConv>/djvulibre/bin
+    )
 endif()
 
 message(STATUS "Configured jp2convert and EzConv targets successfully.")
+

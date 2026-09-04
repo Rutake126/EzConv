@@ -4,6 +4,7 @@
 #include "image_encoder.hpp"
 #include "jp2_decoder.hpp"
 #include "thread_pool.hpp"
+#include "djvu_pdf_engine.hpp"
 #include <string>
 #include <vector>
 #include <functional>
@@ -17,6 +18,7 @@ struct ConvertOptions {
     int quality{90};
     size_t thread_count{0}; // 0 = auto detect
     bool recursive{false};
+    DjVuConvertOptions djvu_options;
 };
 
 struct ConvertStats {

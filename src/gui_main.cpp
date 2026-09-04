@@ -17,6 +17,7 @@
 #include <iostream>
 #include <memory>
 #include <atomic>
+#include <fstream>
 
 #include "WebView2.h"
 #include "converter_engine.hpp"
@@ -43,6 +44,7 @@ static std::string g_last_output_dir = "";
 static std::vector<fs::path> g_last_converted_files;
 static std::wstring g_last_out_ext = L"jpg";
 static std::mutex g_files_mutex;
+static std::wstring g_cmd_line = L"";
 
 // Helper to escape strings for JavaScript execution
 static std::wstring escape_js_string(const std::wstring& str) {
@@ -69,10 +71,40 @@ static std::string ws2s(const std::wstring& wstr) {
 
 static std::wstring s2ws(const std::string& str) {
     if (str.empty()) return L"";
-    int size = MultiByteToWideChar(CP_UTF8, 0, str.data(), (int)str.size(), nullptr, 0);
-    std::wstring wstr(size, 0);
-    MultiByteToWideChar(CP_UTF8, 0, str.data(), (int)str.size(), &wstr[0], size);
-    return wstr;
+    int size = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, str.data(), (int)str.size(), nullptr, 0);
+    if (size > 0) {
+        std::wstring wstr(size, 0);
+        MultiByteToWideChar(CP_UTF8, 0, str.data(), (int)str.size(), &wstr[0], size);
+        return wstr;
+    }
+    size = MultiByteToWideChar(CP_ACP, 0, str.data(), (int)str.size(), nullptr, 0);
+    if (size > 0) {
+        std::wstring wstr(size, 0);
+        MultiByteToWideChar(CP_ACP, 0, str.data(), (int)str.size(), &wstr[0], size);
+        return wstr;
+    }
+    return L"";
+}
+
+static std::mutex g_log_mutex;
+static void write_debug_log(const std::string& tag, const std::string& msg) {
+    try {
+        std::lock_guard<std::mutex> lock(g_log_mutex);
+        wchar_t mod_path[MAX_PATH] = {0};
+        GetModuleFileNameW(NULL, mod_path, MAX_PATH);
+        fs::path log_path = fs::path(mod_path).parent_path() / "EzConv_debug.log";
+
+        SYSTEMTIME st;
+        GetLocalTime(&st);
+        char time_buf[64];
+        snprintf(time_buf, sizeof(time_buf), "[%02d:%02d:%02d.%03d]", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+
+        std::ofstream log_file(log_path, std::ios::app);
+        if (log_file.is_open()) {
+            log_file << time_buf << " [" << tag << "] " << msg << "\n";
+            log_file.flush();
+        }
+    } catch (...) {}
 }
 
 // Execute JavaScript in webview from any thread safely
@@ -112,45 +144,69 @@ static std::wstring open_folder_dialog(HWND parent) {
 // Native Win32 Open Files Dialog
 static std::vector<std::wstring> open_files_dialog(HWND parent) {
     std::vector<std::wstring> file_paths;
+    write_debug_log("FILE", "open_files_dialog started");
     IFileOpenDialog* pFileOpen = nullptr;
     HRESULT hr = CoCreateInstance(CLSID_FileOpenDialog, NULL, CLSCTX_ALL, IID_IFileOpenDialog, reinterpret_cast<void**>(&pFileOpen));
+    char hr_buf[32];
+    snprintf(hr_buf, sizeof(hr_buf), "0x%08X", hr);
+    write_debug_log("FILE", std::string("CoCreateInstance(CLSID_FileOpenDialog) returned: ") + hr_buf);
     if (SUCCEEDED(hr)) {
         DWORD dwOptions;
         if (SUCCEEDED(pFileOpen->GetOptions(&dwOptions))) {
             pFileOpen->SetOptions(dwOptions | FOS_ALLOWMULTISELECT | FOS_FORCEFILESYSTEM);
         }
         COMDLG_FILTERSPEC fileTypes[] = {
+            { L"支持的所有文件 (*.jp2;*.djvu;...)", L"*.jp2;*.j2k;*.jpf;*.jpc;*.djvu;*.djv" },
+            { L"DjVu 文档 (*.djvu;*.djv)", L"*.djvu;*.djv" },
             { L"JPEG 2000 图像 (*.jp2;*.j2k)", L"*.jp2;*.j2k;*.jpf;*.jpc" },
             { L"所有文件 (*.*)", L"*.*" }
         };
-        pFileOpen->SetFileTypes(2, fileTypes);
-        pFileOpen->SetTitle(L"选择 JP2 图像文件");
+        pFileOpen->SetFileTypes(4, fileTypes);
+        pFileOpen->SetTitle(L"选择待转换文件 (JP2 / DjVu)");
 
-        if (SUCCEEDED(pFileOpen->Show(parent))) {
+        hr = pFileOpen->Show(parent);
+        snprintf(hr_buf, sizeof(hr_buf), "0x%08X", hr);
+        write_debug_log("FILE", std::string("dialog.Show(parent) returned: ") + hr_buf);
+
+        if (SUCCEEDED(hr)) {
             IShellItemArray* pItems = nullptr;
-            if (SUCCEEDED(pFileOpen->GetResults(&pItems))) {
+            hr = pFileOpen->GetResults(&pItems);
+            snprintf(hr_buf, sizeof(hr_buf), "0x%08X", hr);
+            write_debug_log("FILE", std::string("GetResults(&pItems) returned: ") + hr_buf);
+            if (SUCCEEDED(hr)) {
                 DWORD count = 0;
                 pItems->GetCount(&count);
+                write_debug_log("FILE", "Selected item count = " + std::to_string(count));
                 for (DWORD i = 0; i < count; ++i) {
                     IShellItem* pItem = nullptr;
                     if (SUCCEEDED(pItems->GetItemAt(i, &pItem))) {
                         PWSTR pszFilePath = nullptr;
-                        if (SUCCEEDED(pItem->GetDisplayName(SIGDN_FILESYSPATH, &pszFilePath))) {
+                        HRESULT hrDisp = pItem->GetDisplayName(SIGDN_FILESYSPATH, &pszFilePath);
+                        char hr_d_buf[32];
+                        snprintf(hr_d_buf, sizeof(hr_d_buf), "0x%08X", hrDisp);
+                        if (SUCCEEDED(hrDisp) && pszFilePath) {
+                            write_debug_log("FILE", std::string("Item [") + std::to_string(i) + "] GetDisplayName OK: " + ws2s(pszFilePath));
                             file_paths.push_back(pszFilePath);
                             CoTaskMemFree(pszFilePath);
+                        } else {
+                            write_debug_log("FILE", std::string("Item [") + std::to_string(i) + "] GetDisplayName FAILED: " + hr_d_buf);
                         }
                         pItem->Release();
                     }
                 }
                 pItems->Release();
             }
+        } else if (hr == HRESULT_FROM_WIN32(ERROR_CANCELLED)) {
+            write_debug_log("FILE", "File dialog cancelled by user (0x800704C7)");
+        } else {
+            write_debug_log("FILE", std::string("File dialog Show failed with hr: ") + hr_buf);
         }
         pFileOpen->Release();
     }
     return file_paths;
 }
 
-// Native Win32 Save File Dialog (Save single image to custom path)
+// Native Win32 Save File Dialog (Save single image/document to custom path)
 static std::wstring save_file_dialog(HWND parent, const std::wstring& default_name, const std::wstring& ext) {
     std::wstring selected_path;
     IFileSaveDialog* pFileSave = nullptr;
@@ -158,14 +214,21 @@ static std::wstring save_file_dialog(HWND parent, const std::wstring& default_na
     if (SUCCEEDED(hr)) {
         pFileSave->SetFileName(default_name.c_str());
         pFileSave->SetDefaultExtension(ext.c_str());
-        std::wstring filter_name = (ext == L"jpg" || ext == L"jpeg") ? L"JPEG 图像 (*.jpg)" : L"PNG 图像 (*.png)";
+        std::wstring filter_name;
+        if (ext == L"pdf") {
+            filter_name = L"PDF 文档 (*.pdf)";
+        } else if (ext == L"jpg" || ext == L"jpeg") {
+            filter_name = L"JPEG 图像 (*.jpg)";
+        } else {
+            filter_name = L"PNG 图像 (*.png)";
+        }
         std::wstring filter_spec = L"*." + ext;
         COMDLG_FILTERSPEC fileTypes[] = {
             { filter_name.c_str(), filter_spec.c_str() },
             { L"所有文件 (*.*)", L"*.*" }
         };
         pFileSave->SetFileTypes(2, fileTypes);
-        pFileSave->SetTitle(L"保存图像为...");
+        pFileSave->SetTitle(L"保存文件为...");
         if (SUCCEEDED(pFileSave->Show(parent))) {
             IShellItem* pItem = nullptr;
             if (SUCCEEDED(pFileSave->GetResult(&pItem))) {
@@ -209,12 +272,56 @@ static std::wstring save_folder_dialog(HWND parent, const std::wstring& title) {
     return selected_path;
 }
 
+// Helper to build JSON representation of a file, including real DjVu page count
+static std::wstring build_file_json(const fs::path& p) {
+    write_debug_log("FILE", "build_file_json started for: " + ws2s(p.wstring()));
+    std::error_code ec;
+    auto fsize = fs::file_size(p, ec);
+    std::string ext = p.extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    bool is_djvu = (ext == ".djvu" || ext == ".djv");
+    int pages = 1;
+    if (is_djvu) {
+        write_debug_log("DJVU", "Calling DjVuPdfEngine::get_page_count for: " + ws2s(p.wstring()));
+        pages = DjVuPdfEngine::get_page_count(ws2s(p.wstring()));
+        write_debug_log("DJVU", "get_page_count returned: pages = " + std::to_string(pages));
+        if (pages <= 0) pages = 1;
+    }
+    std::wstringstream js;
+    js << L"{\"name\":\"" << escape_js_string(p.filename().wstring()) 
+       << L"\", \"path\":\"" << escape_js_string(p.wstring()) 
+       << L"\", \"size\":" << fsize 
+       << L", \"pages\":" << pages 
+       << L", \"is_djvu\":" << (is_djvu ? L"true" : L"false") << L"}";
+    write_debug_log("FILE", "build_file_json completed: " + ws2s(js.str()));
+    return js.str();
+}
+
 // Process dropped files/folders from Windows Explorer
 static void handle_dropped_paths(const std::vector<std::wstring>& paths) {
     if (paths.empty()) return;
+
+    if (paths.size() == 1) {
+        fs::path dp(paths[0]);
+        if (fs::is_directory(dp)) {
+            std::vector<fs::path> scanned = ConverterEngine::scan_files(dp, true);
+            if (scanned.empty()) {
+                exec_js_safe(L"if (window.app) window.app.showToast(\"选中的文件夹中没有找到支持的 .jp2 或 .djvu 文件\");");
+            } else {
+                std::wstringstream js;
+                js << L"window.onNativeFolderSelected(\"" << escape_js_string(dp.wstring()) << L"\", [";
+                for (size_t i = 0; i < scanned.size(); ++i) {
+                    if (i > 0) js << L", ";
+                    js << build_file_json(scanned[i]);
+                }
+                js << L"]);";
+                exec_js_safe(js.str());
+            }
+            return;
+        }
+    }
     
     std::vector<fs::path> all_jp2_files;
-    std::error_code ec;
 
     for (const auto& wpath : paths) {
         fs::path p(wpath);
@@ -222,7 +329,11 @@ static void handle_dropped_paths(const std::vector<std::wstring>& paths) {
             std::vector<fs::path> scanned = ConverterEngine::scan_files(p, true);
             all_jp2_files.insert(all_jp2_files.end(), scanned.begin(), scanned.end());
         } else if (fs::is_regular_file(p)) {
-            all_jp2_files.push_back(p);
+            std::string ext = p.extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (ext == ".jp2" || ext == ".j2k" || ext == ".jpf" || ext == ".jpc" || ext == ".djvu" || ext == ".djv") {
+                all_jp2_files.push_back(p);
+            }
         }
     }
 
@@ -231,13 +342,12 @@ static void handle_dropped_paths(const std::vector<std::wstring>& paths) {
         js << L"window.onNativeFilesSelected([";
         for (size_t i = 0; i < all_jp2_files.size(); ++i) {
             if (i > 0) js << L", ";
-            auto fsize = fs::file_size(all_jp2_files[i], ec);
-            js << L"{\"name\":\"" << escape_js_string(all_jp2_files[i].filename().wstring()) 
-               << L"\", \"path\":\"" << escape_js_string(all_jp2_files[i].wstring()) 
-               << L"\", \"size\":" << fsize << L"}";
+            js << build_file_json(all_jp2_files[i]);
         }
         js << L"]);";
         exec_js_safe(js.str());
+    } else {
+        exec_js_safe(L"if (window.app) window.app.showToast(\"拖入的内容中没有支持的 .jp2 或 .djvu 文件\");");
     }
 }
 
@@ -295,7 +405,15 @@ static std::string get_json_field(const std::string& json, const std::string& ke
     if (json[pos] == '"') {
         size_t end_pos = pos + 1;
         while (end_pos < json.size()) {
-            if (json[end_pos] == '"' && json[end_pos - 1] != '\\') break;
+            if (json[end_pos] == '"') {
+                size_t slashes = 0;
+                size_t k = end_pos;
+                while (k > 0 && json[k - 1] == '\\') {
+                    slashes++;
+                    k--;
+                }
+                if (slashes % 2 == 0) break;
+            }
             end_pos++;
         }
         if (end_pos < json.size()) {
@@ -315,6 +433,15 @@ static std::string get_json_field(const std::string& json, const std::string& ke
 static fs::path to_clean_path(const std::string& u8str) {
     if (u8str.empty()) return fs::path();
     std::wstring wstr = s2ws(u8str);
+
+    // 彻底剥除首尾可能携带的双引号、单引号或空白字符
+    while (!wstr.empty() && (wstr.front() == L' ' || wstr.front() == L'\t' || wstr.front() == L'"' || wstr.front() == L'\'')) {
+        wstr.erase(wstr.begin());
+    }
+    while (!wstr.empty() && (wstr.back() == L' ' || wstr.back() == L'\t' || wstr.back() == L'"' || wstr.back() == L'\'')) {
+        wstr.pop_back();
+    }
+
     for (auto& ch : wstr) {
         if (ch == L'/') ch = L'\\';
     }
@@ -347,7 +474,15 @@ static std::vector<std::string> get_json_string_array(const std::string& json, c
         
         size_t quote_end = quote_start + 1;
         while (quote_end < arr_str.size()) {
-            if (arr_str[quote_end] == '"' && arr_str[quote_end - 1] != '\\') break;
+            if (arr_str[quote_end] == '"') {
+                size_t slashes = 0;
+                size_t k = quote_end;
+                while (k > 0 && arr_str[k - 1] == '\\') {
+                    slashes++;
+                    k--;
+                }
+                if (slashes % 2 == 0) break;
+            }
             quote_end++;
         }
         if (quote_end >= arr_str.size()) break;
@@ -418,6 +553,7 @@ struct BatchContext {
     size_t threads{4};
     fs::path out_dir;
     std::string out_ext;
+    DjVuConvertOptions djvu_opts;
     std::atomic<size_t> done_count{0};
     std::atomic<size_t> success_count{0};
     std::atomic<size_t> fail_count{0};
@@ -431,42 +567,61 @@ static void handle_web_message(const std::wstring& msg) {
         std::string json = ws2s(msg);
         std::string type = get_json_field(json, "type");
 
+        if (type == "debug_log") {
+            write_debug_log("JS][" + get_json_field(json, "tag"), get_json_field(json, "msg"));
+            return;
+        }
+
+        write_debug_log("C++", "handle_web_message received: type = " + type);
+
         if (type == "select_folder") {
             std::wstring folder = open_folder_dialog(g_hWnd);
             if (!folder.empty()) {
                 std::error_code ec;
                 fs::path fpath(folder);
-                std::vector<fs::path> scanned = ConverterEngine::scan_files(fpath, false);
+                std::vector<fs::path> scanned = ConverterEngine::scan_files(fpath, true);
                 
-                std::wstringstream js;
-                js << L"window.onNativeFolderSelected(\"" << escape_js_string(folder) << L"\", [";
-                for (size_t i = 0; i < scanned.size(); ++i) {
-                    if (i > 0) js << L", ";
-                    auto fsize = fs::file_size(scanned[i], ec);
-                    js << L"{\"name\":\"" << escape_js_string(scanned[i].filename().wstring()) 
-                       << L"\", \"path\":\"" << escape_js_string(scanned[i].wstring()) 
-                       << L"\", \"size\":" << fsize << L"}";
+                if (scanned.empty()) {
+                    exec_js_safe(L"if (window.app) window.app.showToast(\"选中的文件夹中没有找到支持的 .jp2 或 .djvu 文件\");");
+                } else {
+                    std::wstringstream js;
+                    js << L"window.onNativeFolderSelected(\"" << escape_js_string(folder) << L"\", [";
+                    for (size_t i = 0; i < scanned.size(); ++i) {
+                        if (i > 0) js << L", ";
+                        js << build_file_json(scanned[i]);
+                    }
+                    js << L"]);";
+                    exec_js_safe(js.str());
                 }
-                js << L"]);";
-                exec_js_safe(js.str());
             }
         }
         else if (type == "select_files") {
+            write_debug_log("C++", "select_files received, launching open_files_dialog");
             std::vector<std::wstring> files = open_files_dialog(g_hWnd);
+            write_debug_log("C++", "open_files_dialog returned " + std::to_string(files.size()) + " files");
             if (!files.empty()) {
                 std::wstringstream js;
                 js << L"window.onNativeFilesSelected([";
-                std::error_code ec;
                 for (size_t i = 0; i < files.size(); ++i) {
                     if (i > 0) js << L", ";
-                    fs::path p(files[i]);
-                    auto fsize = fs::file_size(p, ec);
-                    js << L"{\"name\":\"" << escape_js_string(p.filename().wstring()) 
-                       << L"\", \"path\":\"" << escape_js_string(p.wstring()) 
-                       << L"\", \"size\":" << fsize << L"}";
+                    js << build_file_json(fs::path(files[i]));
                 }
                 js << L"]);";
+                write_debug_log("C++", "calling exec_js_safe for onNativeFilesSelected");
                 exec_js_safe(js.str());
+            } else {
+                write_debug_log("C++", "files list is empty, no script sent");
+            }
+        }
+        else if (type == "paths_dropped") {
+            std::vector<std::string> raw_paths = get_json_string_array(json, "paths");
+            std::vector<std::wstring> wpaths;
+            for (const auto& s : raw_paths) {
+                fs::path p = to_clean_path(s);
+                if (!p.empty()) wpaths.push_back(p.wstring());
+            }
+            if (!wpaths.empty()) {
+                handle_dropped_paths(wpaths);
             }
         }
         else if (type == "select_path_input") {
@@ -477,30 +632,29 @@ static void handle_web_message(const std::wstring& msg) {
                     try { p = fs::u8path(input_path_str); } catch (...) {}
                 }
                 if (fs::exists(p)) {
-                    std::error_code ec;
                     if (fs::is_directory(p)) {
-                        std::vector<fs::path> scanned = ConverterEngine::scan_files(p, false);
-                        std::wstringstream js;
-                        js << L"window.onNativeFolderSelected(\"" << escape_js_string(p.wstring()) << L"\", [";
-                        for (size_t i = 0; i < scanned.size(); ++i) {
-                            if (i > 0) js << L", ";
-                            auto fsize = fs::file_size(scanned[i], ec);
-                            js << L"{\"name\":\"" << escape_js_string(scanned[i].filename().wstring()) 
-                               << L"\", \"path\":\"" << escape_js_string(scanned[i].wstring()) 
-                               << L"\", \"size\":" << fsize << L"}";
+                        std::vector<fs::path> scanned = ConverterEngine::scan_files(p, true);
+                        if (scanned.empty()) {
+                            exec_js_safe(L"if (window.app) window.app.showToast(\"未在该文件夹中找到支持的 .jp2 或 .djvu 文件\");");
+                        } else {
+                            std::wstringstream js;
+                            js << L"window.onNativeFolderSelected(\"" << escape_js_string(p.wstring()) << L"\", [";
+                            for (size_t i = 0; i < scanned.size(); ++i) {
+                                if (i > 0) js << L", ";
+                                js << build_file_json(scanned[i]);
+                            }
+                            js << L"]);";
+                            exec_js_safe(js.str());
                         }
-                        js << L"]);";
-                        exec_js_safe(js.str());
                     } else if (fs::is_regular_file(p)) {
-                        auto fsize = fs::file_size(p, ec);
                         std::wstringstream js;
                         js << L"window.onNativeFilesSelected([";
-                        js << L"{\"name\":\"" << escape_js_string(p.filename().wstring()) 
-                           << L"\", \"path\":\"" << escape_js_string(p.wstring()) 
-                           << L"\", \"size\":" << fsize << L"}";
+                        js << build_file_json(p);
                         js << L"]);";
                         exec_js_safe(js.str());
                     }
+                } else {
+                    exec_js_safe(L"if (window.app) window.app.showToast(\"无法打开指定路径：文件或目录不存在\");");
                 }
             }
         }
@@ -522,14 +676,14 @@ static void handle_web_message(const std::wstring& msg) {
                     fs::copy_file(single_src, fs::path(save_path), fs::copy_options::overwrite_existing, ec);
                     if (!ec) {
                         std::wstringstream js;
-                        js << L"if (app) app.showToast(\"已成功保存至: " << escape_js_string(save_path) << L"\");";
+                        js << L"if (window.app) window.app.showToast(\"已成功保存至: " << escape_js_string(save_path) << L"\");";
                         exec_js_safe(js.str());
                         ShellExecuteW(NULL, L"open", L"explorer.exe", (L"/select,\"" + save_path + L"\"").c_str(), NULL, SW_SHOWNORMAL);
                     } else {
-                        exec_js_safe(L"if (app) app.showToast(\"保存失败，请检查写入权限\");");
+                        exec_js_safe(L"if (window.app) window.app.showToast(\"保存失败，请检查写入权限\");");
                     }
                 } else {
-                    exec_js_safe(L"if (app) app.showToast(\"已取消保存\");");
+                    exec_js_safe(L"if (window.app) window.app.showToast(\"已取消保存\");");
                 }
             }
             else if (!files_to_save.empty()) {
@@ -547,11 +701,11 @@ static void handle_web_message(const std::wstring& msg) {
                     }
 
                     std::wstringstream js;
-                    js << L"if (app) app.showToast(\"已成功保存 " << copied << L" 个文件至目标文件夹\");";
+                    js << L"if (window.app) window.app.showToast(\"已成功保存 " << copied << L" 个文件至目标文件夹\");";
                     exec_js_safe(js.str());
                     ShellExecuteW(NULL, L"open", target_folder.c_str(), NULL, NULL, SW_SHOWNORMAL);
                 } else {
-                    exec_js_safe(L"if (app) app.showToast(\"已取消保存\");");
+                    exec_js_safe(L"if (window.app) window.app.showToast(\"已取消保存\");");
                 }
             }
             else if (!g_last_output_dir.empty()) {
@@ -579,7 +733,7 @@ static void handle_web_message(const std::wstring& msg) {
             std::wstring folder = open_folder_dialog(g_hWnd);
             if (!folder.empty()) {
                 std::wstringstream js;
-                js << L"if (app) app.setCustomOutputDir(\"" << escape_js_string(folder) << L"\");";
+                js << L"if (window.app) window.app.setCustomOutputDir(\"" << escape_js_string(folder) << L"\");";
                 exec_js_safe(js.str());
             }
         }
@@ -591,11 +745,34 @@ static void handle_web_message(const std::wstring& msg) {
             std::string quality_str = get_json_field(json, "quality");
             std::string threads_str = get_json_field(json, "threads");
             std::string custom_out_dir = get_json_field(json, "output_dir");
+            std::string djvu_mode_str = get_json_field(json, "djvu_mode");
+            std::string keep_ocr_str = get_json_field(json, "keep_ocr");
+            std::string keep_bm_str = get_json_field(json, "keep_bookmarks");
 
             ctx->quality = quality_str.empty() ? 90 : std::stoi(quality_str);
             ctx->threads = threads_str.empty() ? 0 : std::stoul(threads_str);
-            ctx->format = (format_str == "png") ? ImageFormat::PNG : ImageFormat::JPG;
-            ctx->out_ext = (ctx->format == ImageFormat::JPG) ? ".jpg" : ".png";
+
+            if (format_str == "png") {
+                ctx->format = ImageFormat::PNG;
+                ctx->out_ext = ".png";
+            } else if (format_str == "pdf") {
+                ctx->format = ImageFormat::PDF;
+                ctx->out_ext = ".pdf";
+            } else {
+                ctx->format = ImageFormat::JPG;
+                ctx->out_ext = ".jpg";
+            }
+
+            ctx->djvu_opts.bg_quality = ctx->quality;
+            ctx->djvu_opts.keep_ocr = (keep_ocr_str != "false");
+            ctx->djvu_opts.keep_bookmarks = (keep_bm_str != "false");
+            if (djvu_mode_str == "bitonal") {
+                ctx->djvu_opts.mode = DjVuConvertMode::Bitonal;
+            } else if (djvu_mode_str == "photo") {
+                ctx->djvu_opts.mode = DjVuConvertMode::PhotoHighQ;
+            } else {
+                ctx->djvu_opts.mode = DjVuConvertMode::SmartMRC;
+            }
 
             if (ctx->tasks.empty()) {
                 exec_js_safe(L"window.onNativeBatchDone(0, 0, \"\");");
@@ -614,9 +791,9 @@ static void handle_web_message(const std::wstring& msg) {
                     try { first_file = fs::u8path(ctx->tasks[0].path); } catch (...) {}
                 }
                 if (first_file.has_parent_path() && !first_file.parent_path().empty()) {
-                    ctx->out_dir = first_file.parent_path() / "converted_images";
+                    ctx->out_dir = first_file.parent_path() / "converted_files";
                 } else {
-                    ctx->out_dir = fs::current_path() / "converted_images";
+                    ctx->out_dir = fs::current_path() / "converted_files";
                 }
             }
             g_last_output_dir = ws2s(ctx->out_dir.wstring());
@@ -639,12 +816,35 @@ static void handle_web_message(const std::wstring& msg) {
                                     try { src_p = fs::u8path(item.path); } catch (...) {}
                                 }
                                 fs::path dst_p = ctx->out_dir / src_p.filename();
-                                dst_p.replace_extension(ctx->out_ext);
+
+                                std::string ext = src_p.extension().string();
+                                std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                                bool is_djvu = (ext == ".djvu" || ext == ".djv");
+
+                                if (is_djvu) {
+                                    dst_p.replace_extension(".pdf");
+                                } else {
+                                    dst_p.replace_extension(ctx->out_ext);
+                                }
 
                                 std::string src_u8 = ws2s(src_p.wstring());
                                 std::string dst_u8 = ws2s(dst_p.wstring());
 
-                                bool ok = ConverterEngine::convert_single(src_u8, dst_u8, ctx->format, ctx->quality);
+                                bool ok = false;
+                                if (is_djvu) {
+                                    ok = DjVuPdfEngine::convert_djvu_to_pdf(src_u8, dst_u8, ctx->djvu_opts, [item, total](const DjVuConvertProgress& prog) {
+                                        std::wstringstream js;
+                                        js << L"if (window.onNativePageProgress) window.onNativePageProgress(\""
+                                           << escape_js_string(s2ws(item.id)) << L"\", "
+                                           << prog.current_page << L", "
+                                           << prog.total_pages << L", \""
+                                           << escape_js_string(s2ws(prog.phase)) << L"\");";
+                                        exec_js_safe(js.str());
+                                    });
+                                } else {
+                                    ok = ConverterEngine::convert_single(src_u8, dst_u8, ctx->format, ctx->quality);
+                                }
+
                                 if (ok) {
                                     ctx->success_count++;
                                     std::lock_guard<std::mutex> lock(ctx->files_mtx);
@@ -771,7 +971,21 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         std::wstring* script = reinterpret_cast<std::wstring*>(wParam);
         if (script) {
             if (g_webview) {
-                g_webview->ExecuteScript(script->c_str(), nullptr);
+                write_debug_log("WEBVIEW", "ExecuteScript START, length = " + std::to_string(script->length()) + ", snippet: " + ws2s(script->substr(0, 120)));
+                HRESULT hr = g_webview->ExecuteScript(script->c_str(),
+                    Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
+                        [](HRESULT error_code, PCWSTR resultObjectAsJson) -> HRESULT {
+                            char hr_buf[32];
+                            snprintf(hr_buf, sizeof(hr_buf), "0x%08X", error_code);
+                            std::string res_str = (resultObjectAsJson != nullptr) ? ws2s(resultObjectAsJson) : "null";
+                            write_debug_log("WEBVIEW", std::string("ExecuteScript completed: hr = ") + hr_buf + ", result = " + res_str);
+                            return S_OK;
+                        }).Get());
+                char hr_buf[32];
+                snprintf(hr_buf, sizeof(hr_buf), "0x%08X", hr);
+                write_debug_log("WEBVIEW", std::string("ExecuteScript call returned HRESULT = ") + hr_buf);
+            } else {
+                write_debug_log("WEBVIEW", "ExecuteScript skipped: g_webview is null");
             }
             delete script;
         }
@@ -779,6 +993,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     }
 
     case WM_DESTROY:
+        write_debug_log("APP", "WM_DESTROY received, quitting");
         PostQuitMessage(0);
         return 0;
     }
@@ -788,7 +1003,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 // WinMain Entry Point
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine, int nCmdShow) {
     (void)hPrevInstance;
-    (void)pCmdLine;
+    g_cmd_line = pCmdLine ? pCmdLine : L"";
+
+    wchar_t exePath[MAX_PATH] = {0};
+    GetModuleFileNameW(NULL, exePath, MAX_PATH);
+    write_debug_log("APP", "EzConv started, exe path = " + ws2s(exePath) + ", cwd = " + ws2s(fs::current_path().wstring()));
 
     CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
 
@@ -822,7 +1041,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
         NULL, NULL, hInstance, NULL
     );
 
-    if (!hWnd) return 0;
+    if (!hWnd) {
+        write_debug_log("APP", "CreateWindowExW failed!");
+        return 0;
+    }
     g_hWnd = hWnd;
     DragAcceptFiles(hWnd, TRUE);
 
@@ -846,6 +1068,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
 
     std::error_code ec;
     fs::create_directories(user_data_path, ec);
+    write_debug_log("WEBVIEW", "WebView2 user data path: " + ws2s(user_data_path.wstring()));
 
     // Initialize WebView2
     CreateCoreWebView2EnvironmentWithOptions(
@@ -854,15 +1077,25 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
             [hWnd](HRESULT hr, ICoreWebView2Environment* env) -> HRESULT {
                 try {
                     if (FAILED(hr) || !env) {
+                        char hr_buf[32];
+                        snprintf(hr_buf, sizeof(hr_buf), "0x%08X", hr);
+                        write_debug_log("WEBVIEW", std::string("CreateCoreWebView2Environment failed with hr = ") + hr_buf);
                         MessageBoxW(hWnd, L"未检测到 Microsoft Edge WebView2 运行时。\n请访问微软官网下载安装 WebView2 Runtime（Windows 10/11 通常已内置）。", L"EzConv - 启动提示", MB_ICONWARNING | MB_OK);
                         return S_OK;
                     }
+                    write_debug_log("WEBVIEW", "CreateCoreWebView2Environment OK");
 
                     env->CreateCoreWebView2Controller(hWnd,
                         Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
                             [hWnd](HRESULT hr, ICoreWebView2Controller* controller) -> HRESULT {
                                 try {
-                                    if (FAILED(hr) || !controller) return S_OK;
+                                    if (FAILED(hr) || !controller) {
+                                        char hr_buf[32];
+                                        snprintf(hr_buf, sizeof(hr_buf), "0x%08X", hr);
+                                        write_debug_log("WEBVIEW", std::string("CreateCoreWebView2Controller failed with hr = ") + hr_buf);
+                                        return S_OK;
+                                    }
+                                    write_debug_log("WEBVIEW", "CreateCoreWebView2Controller OK");
 
                                     g_controller = controller;
                                     g_controller->get_CoreWebView2(&g_webview);
@@ -877,7 +1110,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
                                         settings->put_IsScriptEnabled(TRUE);
                                         settings->put_AreDefaultScriptDialogsEnabled(TRUE);
                                         settings->put_IsWebMessageEnabled(TRUE);
-                                        settings->put_AreDevToolsEnabled(FALSE);
+                                        settings->put_AreDevToolsEnabled(TRUE);
                                         settings->put_IsStatusBarEnabled(FALSE);
                                     }
 
@@ -899,7 +1132,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
 
                                     // Load embedded self-contained HTML directly into WebView2 memory
                                     std::wstring embedded_html_w = s2ws(get_embedded_html());
+                                    write_debug_log("WEBVIEW", "NavigateToString calling, html length = " + std::to_string(embedded_html_w.length()));
                                     g_webview->NavigateToString(embedded_html_w.c_str());
+                                    write_debug_log("WEBVIEW", "NavigateToString called successfully");
                                 } catch (...) {}
                                 return S_OK;
                             }).Get());

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>EzConv v.1.0.0</title>
+    <title>EzConv v.1.1.0</title>
     <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
@@ -42,8 +42,8 @@
 
     <!-- Global Header (EzConv Title & Subtitle) -->
     <header class="header-section">
-        <h1 class="main-title" id="txtTitle">EzConv v.1.0.0</h1>
-        <div class="subtitle" id="txtSubtitle">(基于 OpenJPEG 官方解码内核)</div>
+        <h1 class="main-title" id="txtTitle">EzConv v.1.1.0</h1>
+        <div class="subtitle" id="txtSubtitle">(基于 OpenJPEG 与 DjVuLibre 官方双内核)</div>
     </header>
 
     <!-- View 1: Main Home View (Book / File Selection) -->
@@ -66,13 +66,13 @@
 
         <!-- Path Input Address Bar -->
         <div class="path-bar-container">
-            <input type="text" id="pathInput" class="path-input" placeholder="在此处粘贴或输入 jp2 文件的地址" spellcheck="false">
+            <input type="text" id="pathInput" class="path-input" placeholder="在此处粘贴或输入 jp2 / djvu 文件的地址" spellcheck="false">
             <button class="path-btn" id="openPathBtn">打开地址</button>
         </div>
 
         <!-- Center Dropzone (DjVu.js Box Style) -->
         <div class="dropzone-box" id="dropzone">
-            <input type="file" id="fileInput" multiple accept=".jp2,.j2k,.jpf,.jpc" style="display: none;">
+            <input type="file" id="fileInput" multiple accept=".jp2,.j2k,.jpf,.jpc,.djvu,.djv" style="display: none;">
             <input type="file" id="folderInput" webkitdirectory directory multiple style="display: none;">
             
             <!-- Upload Icon (Tray with Up Arrow - DjVu.js exact icon) -->
@@ -80,7 +80,7 @@
                 <path d="M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h14v2H5v-2z"/>
             </svg>
             <div class="dropzone-text" id="txtDropzone">将文件拖拽至此处或者单击手动选择</div>
-            <div class="dropzone-subtext" id="txtDropzoneSub" style="display: none;">支持单个/多个 .jp2 文件或整本扫描书籍文件夹</div>
+            <div class="dropzone-subtext" id="txtDropzoneSub" style="display: none;">支持单个/多个 .jp2 / .djvu 文件或扫描书籍文件夹</div>
         </div>
     </div>
 
@@ -138,12 +138,34 @@
                 <label id="lblFormat">目标格式:</label>
                 <select id="settingFormat" class="setting-ctrl">
                     <option value="jpg" selected>JPG / JPEG</option>
-                    <option value="png">PNG</option>
+                    <option value="png">PNG (无损)</option>
+                    <option value="pdf">PDF (DjVu 高保真)</option>
                 </select>
             </div>
 
+            <div id="djvuOptionsSection" style="display: none; width: 100%; border-top: 1px dashed var(--border-color, #e0e0e0); margin-top: 8px; padding-top: 8px;">
+                <div class="setting-row">
+                    <label id="lblDjvuMode">DjVu 转换模式:</label>
+                    <select id="settingDjvuMode" class="setting-ctrl">
+                        <option value="mrc" selected>智能分层 (Smart MRC)</option>
+                        <option value="bitonal">极速黑白 (纯文字高锐利)</option>
+                        <option value="photo">高清全彩 (照片画册)</option>
+                    </select>
+                </div>
+
+                <div class="setting-row">
+                    <label id="lblKeepOcr">保留 OCR 识别文字:</label>
+                    <input type="checkbox" id="settingKeepOcr" checked style="width: 18px; height: 18px; cursor: pointer;">
+                </div>
+
+                <div class="setting-row">
+                    <label id="lblKeepBookmarks">保留多级目录书签:</label>
+                    <input type="checkbox" id="settingKeepBookmarks" checked style="width: 18px; height: 18px; cursor: pointer;">
+                </div>
+            </div>
+
             <div class="setting-row" id="qualityRow">
-                <label id="lblQuality">JPEG 压缩质量:</label>
+                <label id="lblQuality">图像质量 (1-100):</label>
                 <input type="number" id="settingQuality" class="setting-ctrl" min="1" max="100" value="90">
             </div>
 
@@ -168,13 +190,14 @@
                 </svg>
             </button>
             <h2 class="modal-title-center" id="txtAboutTitle">关于 EzConv</h2>
-            <p style="font-size: 14px; margin-bottom: 12px;">
-                本工具用于将 JPEG 2000 (<code>.jp2</code>, <code>.j2k</code>) 高清古籍/扫描图批量转换为通用的 JPG 或 PNG 格式。
+            <p style="font-size: 14px; margin-bottom: 12px;" id="txtAboutDesc">
+                本工具用于将 JPEG 2000 (<code>.jp2</code>, <code>.j2k</code>) 与 DjVu (<code>.djvu</code>, <code>.djv</code>) 高清古籍/扫描图批量转换为通用的 JPG、PNG 或高保真 PDF 格式。
             </p>
-            <ul style="font-size: 13.5px; color: var(--subtext-color); padding-left: 20px; line-height: 1.8; margin-bottom: 18px;">
-                <li>纯本地 C++17 离线解码，零网络上传。</li>
-                <li>基于 OpenJPEG 官方解码内核，支持 16-bit 自动下采样。</li>
-                <li>支持多核 CPU 并发多线程加速。</li>
+            <ul style="font-size: 13.5px; color: var(--subtext-color); padding-left: 20px; line-height: 1.8; margin-bottom: 18px;" id="txtAboutFeatures">
+                <li>纯本地 C++17 离线极速解码，零网络上传，安全隐私。</li>
+                <li>基于 OpenJPEG 官方解码内核，支持 16-bit 自动下采样与色彩保真。</li>
+                <li>基于 DjVuLibre 官方高保真内核，支持 CCITT G4 无损紧凑压缩与 PDF 高清直转。</li>
+                <li>支持多核 CPU 并发多线程加速，专为大型古籍与扫描书籍优化。</li>
             </ul>
             <div class="modal-footer">
                 <button class="btn-modal-save" id="closeAboutBtn">知道了</button>

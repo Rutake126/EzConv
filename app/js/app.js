@@ -1,15 +1,73 @@
-/**
- * JP2 to JPG/PNG Desktop Converter
- * DjVu.js Inspired Minimalist Architecture & Dedicated Book Conversion View
- */
+function logToNative(tag, msg) {
+    const formatted = typeof msg === 'object' ? JSON.stringify(msg) : String(msg);
+    try {
+        console.log(`[EzConv][${tag}] ${formatted}`);
+        if (window.chrome && window.chrome.webview) {
+            window.chrome.webview.postMessage(JSON.stringify({
+                type: 'debug_log',
+                tag: tag,
+                msg: formatted
+            }));
+        }
+    } catch (e) {}
+}
+
+window.onerror = function(message, source, lineno, colno, error) {
+    logToNative('JS_ERROR', `${message} at ${source}:${lineno}:${colno}`);
+};
+window.onunhandledrejection = function(event) {
+    logToNative('JS_PROMISE_ERROR', `${event.reason}`);
+};
+
+// Safe Storage fallback to memory to guard against about:blank WebView2 SecurityError
+const _memoryStorage = new Map();
+function safeStorageGet(key, defaultValue = null) {
+    try {
+        if (window.localStorage) {
+            const v = window.localStorage.getItem(key);
+            return v !== null ? v : defaultValue;
+        }
+    } catch (e) {
+        logToNative('STORAGE', `safeStorageGet fallback to memory for "${key}": ${e.name}`);
+    }
+    return _memoryStorage.has(key) ? _memoryStorage.get(key) : defaultValue;
+}
+
+function safeStorageSet(key, value) {
+    try {
+        if (window.localStorage) {
+            window.localStorage.setItem(key, value);
+            return;
+        }
+    } catch (e) {
+        logToNative('STORAGE', `safeStorageSet fallback to memory for "${key}": ${e.name}`);
+    }
+    _memoryStorage.set(key, String(value));
+}
+
+function safeStorageRemove(key) {
+    try {
+        if (window.localStorage) {
+            window.localStorage.removeItem(key);
+            return;
+        }
+    } catch (e) {
+        logToNative('STORAGE', `safeStorageRemove fallback to memory for "${key}": ${e.name}`);
+    }
+    _memoryStorage.delete(key);
+}
 
 class JP2ConverterApp {
     constructor() {
+        logToNative('INIT', 'JP2ConverterApp constructor START');
         this.tasks = [];
         this.isProcessing = false;
         this.selectedFormat = 'jpg';
         this.quality = 90;
         this.threads = 4;
+        this.djvuMode = 'mrc';
+        this.keepOcr = true;
+        this.keepBookmarks = true;
         this.currentLang = 'zh';
         this.currentBookName = '未命名书籍';
         this.currentFolderPath = '';
@@ -17,15 +75,22 @@ class JP2ConverterApp {
 
         this.i18n = {
             zh: {
-                title: "EzConv v.1.0.0",
-                subtitle: "(基于 OpenJPEG 官方解码内核)",
+                title: "EzConv v.1.1.0",
+                subtitle: "(基于 OpenJPEG 与 DjVuLibre 官方双内核)",
                 linkOptions: "- 查看所有选项",
                 linkAbout: "- 了解更多",
-                placeholder: "在此处粘贴或输入 jp2 文件的地址",
+                placeholder: "在此处粘贴或输入 jp2 / djvu 文件的地址",
                 btnOpen: "打开地址",
                 dropzone: "将文件拖拽至此处或者单击手动选择",
-                dropzoneSub: "支持单个/多个 .jp2 文件或文件夹",
+                dropzoneSub: "支持单个/多个 .jp2 / .djvu 文件或扫描书籍文件夹",
                 modalTitle: "选项",
+                aboutTitle: "关于 EzConv",
+                aboutDesc: "本工具用于将 JPEG 2000 (<code>.jp2</code>, <code>.j2k</code>) 与 DjVu (<code>.djvu</code>, <code>.djv</code>) 高清古籍/扫描图批量转换为通用的 JPG、PNG 或高保真 PDF 格式。",
+                aboutF1: "纯本地 C++17 离线极速解码，零网络上传，安全隐私。",
+                aboutF2: "基于 OpenJPEG 官方解码内核，支持 16-bit 自动下采样与色彩保真。",
+                aboutF3: "基于 DjVuLibre 官方高保真内核，支持 CCITT G4 无损紧凑压缩与 PDF 高清直转。",
+                aboutF4: "支持多核 CPU 并发多线程加速，专为大型古籍与扫描书籍优化。",
+                aboutBtn: "知道了",
                 startConvert: "开始转换",
                 cancel: "取消",
                 converting: "转换中...",
@@ -37,15 +102,22 @@ class JP2ConverterApp {
                 doneToast: "转换完成！已保存在输出目录"
             },
             en: {
-                title: "EzConv v.1.0.0",
-                subtitle: "(Based on OpenJPEG Engine)",
+                title: "EzConv v.1.1.0",
+                subtitle: "(Based on OpenJPEG & DjVuLibre Official Engines)",
                 linkOptions: "- View Options",
                 linkAbout: "- Learn More",
-                placeholder: "Paste or enter jp2 file address here",
+                placeholder: "Paste or enter jp2 / djvu file address here",
                 btnOpen: "Open Path",
                 dropzone: "Drag and drop files here, or click to choose manually",
-                dropzoneSub: "Supports single/multiple .jp2 files or folders",
+                dropzoneSub: "Supports single/multiple .jp2 / .djvu files or folders",
                 modalTitle: "Options",
+                aboutTitle: "About EzConv",
+                aboutDesc: "A lightweight desktop utility to batch convert JPEG 2000 (<code>.jp2</code>, <code>.j2k</code>) and DjVu (<code>.djvu</code>, <code>.djv</code>) scanned documents/books to standard JPG, PNG, or high-fidelity compact PDF formats.",
+                aboutF1: "100% local C++17 offline processing with zero network upload and full privacy.",
+                aboutF2: "Official OpenJPEG decoding engine with automatic 16-bit downsampling and color fidelity.",
+                aboutF3: "Official DjVuLibre engine with CCITT Group 4 lossless compression and direct PDF generation.",
+                aboutF4: "Multi-threaded CPU concurrency optimized for large scanned books and documents.",
+                aboutBtn: "Got it",
                 startConvert: "Start Conversion",
                 cancel: "Cancel",
                 converting: "Converting...",
@@ -59,8 +131,29 @@ class JP2ConverterApp {
         };
 
         this.initDOMElements();
+        logToNative('INIT', 'initDOMElements OK');
+
         this.bindEvents();
+        logToNative('INIT', 'bindEvents OK');
+
+        // Test localStorage explicitly as requested
+        try {
+            logToNative('STORAGE', 'testing localStorage START');
+            const storage = window.localStorage;
+            logToNative('STORAGE', 'localStorage object: ' + (storage ? 'exists' : 'null/undefined'));
+            const value = storage.getItem('__ezconv_test__');
+            logToNative('STORAGE', 'getItem OK, value: ' + value);
+            storage.setItem('__ezconv_test__', '1');
+            storage.removeItem('__ezconv_test__');
+            logToNative('STORAGE', 'read/write OK');
+        } catch (e) {
+            logToNative('STORAGE_ERROR', 'FAILED: ' + e.name + ' - ' + e.message);
+        }
+
         this.initTheme();
+        logToNative('INIT', 'initTheme OK');
+
+        logToNative('INIT', 'JP2ConverterApp constructor END');
     }
 
     initDOMElements() {
@@ -103,6 +196,11 @@ class JP2ConverterApp {
         this.threadsText = document.getElementById('threadsText');
         this.qualityRow = document.getElementById('qualityRow');
 
+        this.djvuOptionsSection = document.getElementById('djvuOptionsSection');
+        this.settingDjvuMode = document.getElementById('settingDjvuMode');
+        this.settingKeepOcr = document.getElementById('settingKeepOcr');
+        this.settingKeepBookmarks = document.getElementById('settingKeepBookmarks');
+
         // Path Input Bar (Home)
         this.pathInput = document.getElementById('pathInput');
         this.openPathBtn = document.getElementById('openPathBtn');
@@ -117,7 +215,7 @@ class JP2ConverterApp {
     }
 
     bindEvents() {
-        const isNative = window.chrome && window.chrome.webview;
+        const isNative = () => Boolean(window.chrome && window.chrome.webview);
 
         // Frameless Window Controls
         const btnWinMin = document.getElementById('btnWinMinimize');
@@ -233,6 +331,10 @@ class JP2ConverterApp {
             if (th > 64) th = 64;
             this.threads = th;
 
+            if (this.settingDjvuMode) this.djvuMode = this.settingDjvuMode.value;
+            if (this.settingKeepOcr) this.keepOcr = this.settingKeepOcr.checked;
+            if (this.settingKeepBookmarks) this.keepBookmarks = this.settingKeepBookmarks.checked;
+
             this.settingsModal.style.display = 'none';
             this.updateBookMeta();
             this.showToast('设置已保存');
@@ -254,12 +356,20 @@ class JP2ConverterApp {
         this.settingThreads.value = this.threads;
 
         this.settingFormat.addEventListener('change', (e) => {
-            this.qualityRow.style.display = (e.target.value === 'jpg') ? 'flex' : 'none';
+            const val = e.target.value;
+            this.selectedFormat = val;
+            this.qualityRow.style.display = (val === 'jpg' || val === 'pdf') ? 'flex' : 'none';
+            if (this.djvuOptionsSection) {
+                this.djvuOptionsSection.style.display = (val === 'pdf') ? 'block' : 'none';
+            }
         });
 
         // Dropzone click -> Native Files Picker (Supports single/multiple .jp2 files)
-        this.dropzone.addEventListener('click', () => {
-            if (isNative) {
+        this.dropzone.addEventListener('click', (e) => {
+            logToNative('UI', 'dropzone clicked, isNative=' + isNative());
+            if (e.target === this.fileInput || e.target === this.folderInput) return;
+            if (isNative()) {
+                logToNative('UI', 'posting select_files message to C++');
                 window.chrome.webview.postMessage(JSON.stringify({ type: 'select_files' }));
             } else {
                 this.fileInput.click();
@@ -270,7 +380,12 @@ class JP2ConverterApp {
         this.folderInput.addEventListener('change', (e) => this.handleFileSelect(e.target.files));
 
         // Drag & Drop
+        // Global Drag & Drop handling to prevent WebView2 navigation
         ['dragenter', 'dragover'].forEach(name => {
+            window.addEventListener(name, (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+            });
             this.dropzone.addEventListener(name, (e) => {
                 e.preventDefault();
                 e.stopPropagation();
@@ -279,6 +394,10 @@ class JP2ConverterApp {
         });
 
         ['dragleave', 'drop'].forEach(name => {
+            window.addEventListener(name, (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+            });
             this.dropzone.addEventListener(name, (e) => {
                 e.preventDefault();
                 e.stopPropagation();
@@ -287,19 +406,26 @@ class JP2ConverterApp {
         });
 
         this.dropzone.addEventListener('drop', (e) => this.handleDrop(e));
+        window.addEventListener('drop', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (this.homeView && this.homeView.style.display !== 'none') {
+                this.handleDrop(e);
+            }
+        });
 
         // Address bar open button
-        this.openPathBtn.addEventListener('click', () => {
+        const handleOpenAddress = () => {
             const rawPath = this.pathInput.value.trim();
             if (!rawPath) {
-                if (isNative) {
-                    window.chrome.webview.postMessage(JSON.stringify({ type: 'select_folder' }));
+                if (isNative()) {
+                    window.chrome.webview.postMessage(JSON.stringify({ type: 'select_files' }));
                 } else {
                     this.fileInput.click();
                 }
                 return;
             }
-            if (isNative) {
+            if (isNative()) {
                 window.chrome.webview.postMessage(JSON.stringify({ 
                     type: 'select_path_input', 
                     path: rawPath 
@@ -307,10 +433,11 @@ class JP2ConverterApp {
             } else {
                 this.showToast('请直接点击上方选择文件或输入路径');
             }
-        });
+        };
 
+        this.openPathBtn.addEventListener('click', handleOpenAddress);
         this.pathInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') this.openPathBtn.click();
+            if (e.key === 'Enter') handleOpenAddress();
         });
 
         // Book View Navigation & Actions
@@ -329,7 +456,7 @@ class JP2ConverterApp {
         
         if (this.btnDownloadBookResult) {
             this.btnDownloadBookResult.addEventListener('click', () => {
-                if (isNative) {
+                if (isNative()) {
                     window.chrome.webview.postMessage(JSON.stringify({ type: 'save_converted_files' }));
                 } else {
                     this.showToast('转换完成！图片已保存在输出目录中');
@@ -350,6 +477,21 @@ class JP2ConverterApp {
         document.getElementById('txtDropzone').textContent = t.dropzone;
         document.getElementById('txtDropzoneSub').textContent = t.dropzoneSub;
         document.getElementById('txtModalOptionsTitle').textContent = t.modalTitle;
+        const txtAboutTitle = document.getElementById('txtAboutTitle');
+        if (txtAboutTitle && t.aboutTitle) txtAboutTitle.textContent = t.aboutTitle;
+        const txtAboutDesc = document.getElementById('txtAboutDesc');
+        if (txtAboutDesc && t.aboutDesc) txtAboutDesc.innerHTML = t.aboutDesc;
+        const txtAboutFeatures = document.getElementById('txtAboutFeatures');
+        if (txtAboutFeatures && t.aboutF1) {
+            txtAboutFeatures.innerHTML = `
+                <li>${t.aboutF1}</li>
+                <li>${t.aboutF2}</li>
+                <li>${t.aboutF3}</li>
+                <li>${t.aboutF4}</li>
+            `;
+        }
+        const closeAboutBtn = document.getElementById('closeAboutBtn');
+        if (closeAboutBtn && t.aboutBtn) closeAboutBtn.textContent = t.aboutBtn;
         if (this.btnBackToHome) {
             this.btnBackToHome.textContent = t.backToHome;
         }
@@ -365,15 +507,19 @@ class JP2ConverterApp {
     }
 
     initTheme() {
-        const savedTheme = localStorage.getItem('app-theme') || 
+        logToNative('THEME', 'initTheme START');
+        logToNative('THEME', 'before safeStorageGet');
+        const savedTheme = safeStorageGet('app-theme') || 
             (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        logToNative('THEME', 'after safeStorageGet, savedTheme = ' + savedTheme);
         this.setTheme(savedTheme);
+        logToNative('THEME', 'initTheme END');
     }
 
     setTheme(theme) {
         const t = (theme === 'dark') ? 'dark' : 'light';
         document.documentElement.setAttribute('data-theme', t);
-        localStorage.setItem('app-theme', t);
+        safeStorageSet('app-theme', t);
         if (this.themeSunBtn) this.themeSunBtn.classList.toggle('active', t === 'light');
         if (this.themeMoonBtn) this.themeMoonBtn.classList.toggle('active', t === 'dark');
     }
@@ -384,12 +530,39 @@ class JP2ConverterApp {
         this.setTheme(nextTheme);
     }
 
-    isJP2File(filename) {
-        return /\.(jp2|j2k|jpf|jpc)$/i.test(filename);
+    isSupportedFile(filename) {
+        if (!filename) return false;
+        return /\.(jp2|j2k|jpf|jpc|djvu|djv)$/i.test(filename);
     }
 
     async handleDrop(e) {
-        const items = e.dataTransfer.items;
+        if (e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        const isNativeEnv = Boolean(window.chrome && window.chrome.webview);
+        const dtFiles = e.dataTransfer ? e.dataTransfer.files : null;
+
+        // In native WebView2 app, extract actual Windows file paths from DataTransfer
+        if (isNativeEnv && dtFiles && dtFiles.length > 0) {
+            const paths = [];
+            for (let i = 0; i < dtFiles.length; i++) {
+                const f = dtFiles[i];
+                if (f && f.path) {
+                    paths.push(f.path);
+                }
+            }
+            if (paths.length > 0) {
+                window.chrome.webview.postMessage(JSON.stringify({
+                    type: 'paths_dropped',
+                    paths: paths
+                }));
+                return;
+            }
+        }
+
+        const items = e.dataTransfer ? e.dataTransfer.items : null;
         if (items) {
             const files = [];
             for (let i = 0; i < items.length; i++) {
@@ -398,12 +571,12 @@ class JP2ConverterApp {
                     await this.traverseFileTree(entry, files);
                 } else {
                     const file = items[i].getAsFile();
-                    if (file && this.isJP2File(file.name)) files.push(file);
+                    if (file && this.isSupportedFile(file.name)) files.push(file);
                 }
             }
             this.addFiles(files);
-        } else {
-            this.handleFileSelect(e.dataTransfer.files);
+        } else if (dtFiles) {
+            this.handleFileSelect(dtFiles);
         }
     }
 
@@ -411,7 +584,7 @@ class JP2ConverterApp {
         if (item.isFile) {
             return new Promise((resolve) => {
                 item.file((file) => {
-                    if (this.isJP2File(file.name)) fileList.push(file);
+                    if (this.isSupportedFile(file.name)) fileList.push(file);
                     resolve();
                 });
             });
@@ -425,9 +598,9 @@ class JP2ConverterApp {
     }
 
     handleFileSelect(fileList) {
-        const validFiles = Array.from(fileList).filter(f => this.isJP2File(f.name));
+        const validFiles = Array.from(fileList).filter(f => this.isSupportedFile(f.name));
         if (validFiles.length === 0) {
-            this.showToast('未检测到 .jp2 文件');
+            this.showToast('未检测到支持的 .jp2 或 .djvu 文件');
             return;
         }
         this.addFiles(validFiles);
@@ -470,12 +643,26 @@ class JP2ConverterApp {
                 file: {
                     name: file.name,
                     size: file.size,
-                    path: filePath
+                    path: filePath,
+                    pages: file.pages || 0
                 },
                 status: 'queued',
                 error: null
             });
         });
+
+        // 智能检测是否包含 DjVu 文件，若包含则自动切换目标格式为 PDF
+        const hasDjVu = files.some(f => {
+            const n = (f.name || '').toLowerCase();
+            return n.endsWith('.djvu') || n.endsWith('.djv');
+        });
+
+        if (hasDjVu) {
+            this.selectedFormat = 'pdf';
+            if (this.settingFormat) this.settingFormat.value = 'pdf';
+            if (this.djvuOptionsSection) this.djvuOptionsSection.style.display = 'block';
+            if (this.qualityRow) this.qualityRow.style.display = 'flex';
+        }
 
         if (this.tasks.length > 0) {
             const targetName = this.extractTargetName(basePath, files);
@@ -526,10 +713,15 @@ class JP2ConverterApp {
         const qualityStr = (this.selectedFormat === 'jpg') ? ` (质量 ${this.quality})` : '';
         const langIsZh = this.currentLang === 'zh';
         
+        let totalPages = 0;
+        this.tasks.forEach(t => {
+            totalPages += (t.file && t.file.pages && t.file.pages > 0) ? t.file.pages : 1;
+        });
+
         if (langIsZh) {
-            this.bookMetaText.textContent = `共 ${this.tasks.length} 页 · 目标格式: ${fmt}${qualityStr} · 并发线程: ${this.threads}`;
+            this.bookMetaText.textContent = `共 ${totalPages} 页 · 目标格式: ${fmt}${qualityStr} · 并发线程: ${this.threads}`;
         } else {
-            this.bookMetaText.textContent = `Total: ${this.tasks.length} pages · Format: ${fmt}${qualityStr} · Threads: ${this.threads}`;
+            this.bookMetaText.textContent = `Total: ${totalPages} pages · Format: ${fmt}${qualityStr} · Threads: ${this.threads}`;
         }
     }
 
@@ -593,7 +785,10 @@ class JP2ConverterApp {
                 paths: paths,
                 format: this.selectedFormat,
                 quality: this.quality.toString(),
-                threads: this.threads.toString()
+                threads: this.threads.toString(),
+                djvu_mode: this.djvuMode,
+                keep_ocr: this.keepOcr ? "true" : "false",
+                keep_bookmarks: this.keepBookmarks ? "true" : "false"
             }));
             return;
         }
@@ -628,26 +823,53 @@ class JP2ConverterApp {
 }
 
 let app;
-document.addEventListener('DOMContentLoaded', () => {
-    app = new JP2ConverterApp();
-});
+function initApp() {
+    logToNative('INIT', 'initApp entered');
+    logToNative('INIT', 'window.app before: ' + (window.app ? 'valid' : 'undefined'));
+    if (!window.app) {
+        try {
+            app = new JP2ConverterApp();
+            window.app = app;
+            logToNative('INIT', 'window.app created: ' + (window.app ? 'valid' : 'null'));
+            logToNative('INIT', 'window.app instanceof JP2ConverterApp: ' + (window.app instanceof JP2ConverterApp));
+        } catch (err) {
+            logToNative('INIT_ERROR', 'new JP2ConverterApp threw: ' + err.name + ': ' + err.message + '\n' + (err.stack || ''));
+        }
+    }
+}
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initApp);
+} else {
+    initApp();
+}
 
 // Global Native Callbacks called from C++ Core
 window.onNativeFilesSelected = (files) => {
-    if (app && files) {
-        app.addFiles(files.map(f => ({ name: f.name, size: f.size, path: f.path })));
+    logToNative('FILE', 'onNativeFilesSelected called');
+    logToNative('FILE', 'files: ' + JSON.stringify(files));
+    logToNative('APP', 'window.app: ' + (window.app ? 'valid' : 'undefined'));
+    const inst = window.app || app;
+    logToNative('APP', 'inst: ' + (inst ? 'valid' : 'undefined'));
+    if (inst && files && files.length > 0) {
+        logToNative('FILE', 'Calling inst.addFiles with ' + files.length + ' files');
+        inst.addFiles(files.map(f => ({ name: f.name, size: f.size, path: f.path, pages: f.pages })));
+    } else {
+        logToNative('FILE_ERROR', 'onNativeFilesSelected skipped! inst=' + Boolean(inst) + ', files=' + Boolean(files && files.length));
     }
 };
 
 window.onNativeFolderSelected = (folder, files) => {
-    if (app && files) {
-        app.pathInput.value = folder;
-        app.addFiles(files.map(f => ({ name: f.name, size: f.size, path: f.path })), folder);
+    const inst = window.app || app;
+    if (inst && files) {
+        if (inst.pathInput) inst.pathInput.value = folder;
+        inst.addFiles(files.map(f => ({ name: f.name, size: f.size, path: f.path, pages: f.pages })), folder);
     }
 };
 
 window.onNativeProgress = function() {
-    if (!app) return;
+    const inst = window.app || app;
+    if (!inst) return;
     
     let taskId = null;
     let success = false;
@@ -673,13 +895,13 @@ window.onNativeProgress = function() {
 
     let task = null;
     if (taskId) {
-        task = app.tasks.find(t => t.id === taskId);
+        task = inst.tasks.find(t => t.id === taskId);
     }
     if (!task && filename) {
-        task = app.tasks.find(t => t.file.name === filename || (t.file.path && t.file.path.endsWith(filename)));
+        task = inst.tasks.find(t => t.file.name === filename || (t.file.path && t.file.path.endsWith(filename)));
     }
-    if (!task && curr > 0 && curr <= app.tasks.length) {
-        task = app.tasks[curr - 1];
+    if (!task && curr > 0 && curr <= inst.tasks.length) {
+        task = inst.tasks[curr - 1];
     }
 
     if (task) {
@@ -687,43 +909,59 @@ window.onNativeProgress = function() {
         task.error = errorMsg;
     }
 
-    app.updateProgress(curr, total, filename);
+    inst.updateProgress(curr, total, filename);
+};
+
+window.onNativePageProgress = function(taskId, curPage, totalPages, phase) {
+    const inst = window.app || app;
+    if (!inst) return;
+    if (inst.bookProgressStatus) {
+        inst.bookProgressStatus.textContent = `[第 ${curPage}/${totalPages} 页] ${phase}`;
+    }
+    const pct = totalPages > 0 ? Math.round((curPage / totalPages) * 100) : 0;
+    if (inst.bookProgressBarFill) {
+        inst.bookProgressBarFill.style.width = `${pct}%`;
+    }
+    if (inst.bookProgressPercent) {
+        inst.bookProgressPercent.textContent = `${pct}% (${curPage}/${totalPages})`;
+    }
 };
 
 window.onNativeBatchDone = (successCount, failCount, outDir) => {
-    if (app) {
-        app.lastOutputDir = outDir || '';
-        app.tasks.forEach(t => {
+    const inst = window.app || app;
+    if (inst) {
+        inst.lastOutputDir = outDir || '';
+        inst.tasks.forEach(t => {
             if (t.status !== 'success' && t.status !== 'error') {
                 t.status = (failCount === 0) ? 'success' : 'error';
             }
         });
         
-        if (app.bookProgressBarFill) {
-            app.bookProgressBarFill.style.width = '100%';
+        if (inst.bookProgressBarFill) {
+            inst.bookProgressBarFill.style.width = '100%';
         }
-        if (app.bookProgressPercent) {
-            app.bookProgressPercent.textContent = `100% (${successCount}/${app.tasks.length})`;
+        if (inst.bookProgressPercent) {
+            inst.bookProgressPercent.textContent = `100% (${successCount}/${inst.tasks.length})`;
         }
-        if (app.bookProgressStatus) {
-            const isZh = app.currentLang === 'zh';
-            app.bookProgressStatus.textContent = isZh ? 
+        if (inst.bookProgressStatus) {
+            const isZh = inst.currentLang === 'zh';
+            inst.bookProgressStatus.textContent = isZh ? 
                 `✔ 转换完成！(成功 ${successCount} 项${failCount > 0 ? ', 失败 ' + failCount + ' 项' : ''})` :
                 `✔ Conversion completed! (${successCount} succeeded${failCount > 0 ? ', ' + failCount + ' failed' : ''})`;
         }
         
-        app.isProcessing = false;
-        if (app.btnCancelConvert) app.btnCancelConvert.style.display = 'none';
-        app.btnStartBookConvert.style.display = 'none';
-        app.btnDownloadBookResult.style.display = 'inline-flex';
-        app.btnConvertAnotherBook.style.display = 'inline-flex';
+        inst.isProcessing = false;
+        if (inst.btnCancelConvert) inst.btnCancelConvert.style.display = 'none';
+        inst.btnStartBookConvert.style.display = 'none';
+        inst.btnDownloadBookResult.style.display = 'inline-flex';
+        inst.btnConvertAnotherBook.style.display = 'inline-flex';
 
         setTimeout(() => {
-            const isZh = app.currentLang === 'zh';
+            const isZh = inst.currentLang === 'zh';
             const msg = isZh ? 
-                `${app.currentBookName} 转换完成！已保存` : 
-                `${app.currentBookName} converted successfully! Saved`;
-            app.showToast(msg);
+                `${inst.currentBookName} 转换完成！已保存` : 
+                `${inst.currentBookName} converted successfully! Saved`;
+            inst.showToast(msg);
         }, 250);
     }
 };

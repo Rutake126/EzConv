@@ -9,10 +9,12 @@
 *.la
 *.lo
 *.dll
+!third_party/**/*.dll
 *.so
 *.so.*
 *.dylib
 *.exe
+!third_party/**/*.exe
 *.out
 *.app
 *.i*86

@@ -56,20 +56,26 @@ int main(int argc, char** argv) {
 
     print_banner();
 
-    CLI::App app{"High Performance Offline JP2 to JPG/PNG Converter"};
+    CLI::App app{"High Performance Offline JP2 & DjVu Converter (JP2 -> JPG/PNG, DjVu -> PDF MRC)"};
 
     std::string input_path;
     std::string output_path;
-    std::string format_str = "jpg";
+    std::string format_str = "auto";
+    std::string djvu_mode_str = "mrc";
     int quality = 90;
     size_t threads = 0;
     bool recursive = false;
+    bool no_ocr = false;
+    bool no_bookmarks = false;
 
-    app.add_option("-i,--input", input_path, "Source JP2 file or directory path");
-    app.add_option("-o,--output", output_path, "Output directory for converted images");
-    app.add_option("-f,--format", format_str, "Target format: jpg or png (default: jpg)");
-    app.add_option("-q,--quality", quality, "JPG quality factor (1-100, default: 90)");
+    app.add_option("-i,--input", input_path, "Source JP2/DjVu file or directory path");
+    app.add_option("-o,--output", output_path, "Output path or directory");
+    app.add_option("-f,--format", format_str, "Target format: jpg, png, or pdf (default: auto)");
+    app.add_option("-q,--quality", quality, "Quality factor (1-100, default: 90)");
     app.add_option("-t,--threads", threads, "Number of concurrent worker threads (0 = auto)");
+    app.add_option("--djvu-mode", djvu_mode_str, "DjVu mode: mrc (Smart MRC), bitonal, or photo");
+    app.add_flag("--no-ocr", no_ocr, "Disable OCR invisible text layer extraction");
+    app.add_flag("--no-bookmarks", no_bookmarks, "Disable outline bookmarks extraction");
     app.add_flag("-r,--recursive", recursive, "Recursively scan subdirectories");
 
     try {
@@ -80,7 +86,7 @@ int main(int argc, char** argv) {
 
     // Interactive fallback mode if no input is supplied
     if (input_path.empty()) {
-        std::cout << "\033[1;36m[交互模式]\033[0m 请输入或直接拖拽待转换的 JP2 文件夹或文件路径:\n> ";
+        std::cout << "\033[1;36m[交互模式]\033[0m 请输入或直接拖拽待转换的文件/文件夹路径 (.jp2, .djvu):\n> ";
         std::string raw_input;
         std::getline(std::cin, raw_input);
 
@@ -95,13 +101,23 @@ int main(int argc, char** argv) {
         }
         input_path = raw_input;
 
-        std::cout << "请选择输出格式 [1] JPG (默认)  [2] PNG:\n> ";
-        std::string choice;
-        std::getline(std::cin, choice);
-        if (choice == "2" || choice == "png" || choice == "PNG") {
-            format_str = "png";
+        fs::path p(input_path);
+        std::string ext = p.extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+        if (ext == ".djvu" || ext == ".djv") {
+            format_str = "pdf";
         } else {
-            format_str = "jpg";
+            std::cout << "请选择输出格式 [1] JPG (默认)  [2] PNG  [3] PDF:\n> ";
+            std::string choice;
+            std::getline(std::cin, choice);
+            if (choice == "2" || choice == "png" || choice == "PNG") {
+                format_str = "png";
+            } else if (choice == "3" || choice == "pdf" || choice == "PDF") {
+                format_str = "pdf";
+            } else {
+                format_str = "jpg";
+            }
         }
     }
 
@@ -116,10 +132,29 @@ int main(int argc, char** argv) {
     std::transform(lower_fmt.begin(), lower_fmt.end(), lower_fmt.begin(), [](unsigned char c) {
         return static_cast<char>(std::tolower(c));
     });
-    opts.format = (lower_fmt == "png") ? ImageFormat::PNG : ImageFormat::JPG;
+
+    if (lower_fmt == "png") {
+        opts.format = ImageFormat::PNG;
+    } else if (lower_fmt == "pdf") {
+        opts.format = ImageFormat::PDF;
+    } else {
+        opts.format = ImageFormat::JPG;
+    }
+
+    // DjVu 专用选项
+    opts.djvu_options.bg_quality = quality;
+    opts.djvu_options.keep_ocr = !no_ocr;
+    opts.djvu_options.keep_bookmarks = !no_bookmarks;
+    if (djvu_mode_str == "bitonal") {
+        opts.djvu_options.mode = DjVuConvertMode::Bitonal;
+    } else if (djvu_mode_str == "photo") {
+        opts.djvu_options.mode = DjVuConvertMode::PhotoHighQ;
+    } else {
+        opts.djvu_options.mode = DjVuConvertMode::SmartMRC;
+    }
 
     std::cout << "\n\033[1;33m[开始处理]\033[0m 扫描输入源: " << input_path << "\n";
-    std::cout << "目标格式: " << ((opts.format == ImageFormat::JPG) ? "JPEG (质量: " + std::to_string(quality) + ")" : "PNG (无损)") << "\n";
+    std::cout << "目标格式: " << ((opts.format == ImageFormat::JPG) ? "JPEG" : ((opts.format == ImageFormat::PNG) ? "PNG" : "PDF (MRC高保真)")) << "\n";
 
     ConvertStats stats = ConverterEngine::convert_batch(opts, [](size_t done, size_t total, const std::string& name, bool ok, const std::string& err) {
         print_progress(done, total, name, ok, err);

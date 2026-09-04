@@ -7,7 +7,8 @@
 
 enum class ImageFormat {
     JPG,
-    PNG
+    PNG,
+    PDF
 };
 
 struct RawImage {
